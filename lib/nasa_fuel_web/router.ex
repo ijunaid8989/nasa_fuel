@@ -13,7 +13,7 @@ defmodule NasaFuelWeb.Router do
   scope "/", NasaFuelWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", MissionLive
   end
 
   # Enable LiveDashboard in development
