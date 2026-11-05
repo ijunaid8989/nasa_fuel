@@ -135,25 +135,29 @@ defmodule NasaFuelWeb.MissionLive do
     end
   end
 
-  defp step_fuel(nil, _index), do: nil
   defp step_fuel(%{per_step: per_step}, index), do: Enum.at(per_step, index)
 
   @doc false
-  def format_kg(nil), do: "—"
+  def format_kg(kg) when is_integer(kg), do: group_thousands(Integer.to_string(kg)) <> " kg"
 
-  def format_kg(kg) when is_integer(kg) and kg < 0, do: "-" <> format_kg(-kg)
+  def format_kg(%Decimal{} = kg) do
+    [whole | fraction] = kg |> Decimal.to_string(:normal) |> String.split(".")
 
-  def format_kg(kg) when is_integer(kg) do
-    digits =
-      kg
-      |> Integer.to_string()
-      |> String.reverse()
-      |> String.graphemes()
-      |> Enum.chunk_every(3)
-      |> Enum.join(",")
-      |> String.reverse()
+    case fraction |> Enum.join() |> String.trim_trailing("0") do
+      "" -> group_thousands(whole) <> " kg"
+      fraction -> group_thousands(whole) <> "." <> fraction <> " kg"
+    end
+  end
 
-    digits <> " kg"
+  defp group_thousands("-" <> digits), do: "-" <> group_thousands(digits)
+
+  defp group_thousands(digits) do
+    digits
+    |> String.reverse()
+    |> String.graphemes()
+    |> Enum.chunk_every(3)
+    |> Enum.join(",")
+    |> String.reverse()
   end
 
   @impl true
@@ -188,9 +192,9 @@ defmodule NasaFuelWeb.MissionLive do
               field={@form[:mass]}
               type="text"
               label="Equipment mass (kg)"
-              inputmode="numeric"
+              inputmode="decimal"
               autocomplete="off"
-              placeholder="e.g. 28,801"
+              placeholder="e.g. 28,801 or 28801.5"
             />
 
             <div>
@@ -233,7 +237,9 @@ defmodule NasaFuelWeb.MissionLive do
                           id={"step-#{step.index}-fuel"}
                           class="shrink-0 break-all font-mono text-sm tabular-nums sm:mt-2 sm:min-w-28 sm:max-w-48 sm:text-right"
                         >
-                          {format_kg(step_fuel(@report, step.index))}
+                          <%!-- Nothing until there is a result: a dash here sat next to the
+                             remove button and read like a second button. --%>
+                          {@report && format_kg(step_fuel(@report, step.index))}
                         </span>
                       </div>
                       <button

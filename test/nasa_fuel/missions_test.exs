@@ -38,14 +38,16 @@ defmodule NasaFuel.MissionsTest do
       assert Missions.change_mission(attrs("28801", [{"land", "earth"}])).valid?
     end
 
-    test "mass is required, whole and positive" do
+    test "mass is required, a number and positive" do
       for {mass, message} <- [
             {"", "enter the spacecraft mass"},
-            {"abc", "must be a whole number of kilograms"},
-            {"12.5", "must be a whole number of kilograms"},
+            {"abc", "must be a number, like 28,801 or 28801.5"},
             {"0", "must be greater than 0"},
+            {"0.000", "must be greater than 0"},
             {"-5", "must be greater than 0"},
-            {"1000000001", "must be at most 1,000,000,000 kg"}
+            {"1000000001", "must be at most 1,000,000,000 kg"},
+            {"1000000000.001", "must be at most 1,000,000,000 kg"},
+            {"12.3456", "use at most 3 decimal places"}
           ] do
         changeset = Missions.change_mission(attrs(mass, [{"land", "earth"}]))
         assert %{mass: [^message]} = errors(changeset), "mass #{inspect(mass)}"
@@ -76,15 +78,41 @@ defmodule NasaFuel.MissionsTest do
       refute Map.has_key?(changeset.changes, :steps)
     end
 
-    test "a mass with thousands separators or a .0 is read as a whole number" do
-      for mass <- ["28,801", "28_801", "28 801", "28801.0", "28801."] do
+    test "reads a mass the way people write it" do
+      for {mass, kg} <- [
+            {"28801", "28801"},
+            {"28,801", "28801"},
+            {"28_801", "28801"},
+            {"28 801", "28801"},
+            {"28801.0", "28801"},
+            {"28801.", "28801"},
+            {"28801.5", "28801.5"},
+            {"28,801.50", "28801.5"},
+            {"0.125", "0.125"},
+            {"28801 kg", "28801"},
+            {"28,801.5 KG", "28801.5"},
+            {"1,000,000,000", "1000000000"}
+          ] do
         changeset = Missions.change_mission(attrs(mass, [{"land", "earth"}]))
-        assert Ecto.Changeset.get_field(changeset, :mass) == 28_801, inspect(mass)
+        assert changeset.valid?, inspect(mass)
+        assert Ecto.Changeset.get_field(changeset, :mass) == Decimal.new(kg), inspect(mass)
       end
 
-      for mass <- ["1e5", "28801.5", "2,8,8.01"] do
+      for mass <- [
+            "1e5",
+            "2,8,8.01",
+            "28,80",
+            ".5",
+            "28801.5.0",
+            "kg",
+            "28801 lb",
+            "Infinity",
+            "NaN"
+          ] do
         changeset = Missions.change_mission(attrs(mass, [{"land", "earth"}]))
-        assert %{mass: ["must be a whole number of kilograms"]} = errors(changeset), inspect(mass)
+
+        assert %{mass: ["must be a number, like 28,801 or 28801.5"]} = errors(changeset),
+               inspect(mass)
       end
     end
 
@@ -149,11 +177,36 @@ defmodule NasaFuel.MissionsTest do
         |> Missions.change_mission()
         |> Ecto.Changeset.apply_action(:calculate)
 
-      assert Missions.calculate(mission) == %{
-               total: 51898,
-               per_step: [32988, 2462, 3001, 13447],
-               launch_mass: 28801 + 51898
-             }
+      assert %{total: 51898, per_step: [32988, 2462, 3001, 13447], launch_mass: launch_mass} =
+               Missions.calculate(mission)
+
+      assert Decimal.equal?(launch_mass, 28801 + 51898)
+    end
+
+    test "uses a decimal mass exactly, launch mass included" do
+      {:ok, mission} =
+        attrs("28801.5", [{"land", "earth"}])
+        |> Missions.change_mission()
+        |> Ecto.Changeset.apply_action(:calculate)
+
+      # Half a kilogram more than Apollo 11 tips the landing over by 1 kg.
+      assert %{total: 13448, launch_mass: launch_mass} = Missions.calculate(mission)
+      assert Decimal.equal?(launch_mass, Decimal.new("42249.5"))
+    end
+
+    test "keeps the launch mass exact past Decimal's 28 digits" do
+      steps =
+        for index <- 1..100, do: {if(rem(index, 2) == 1, do: "launch", else: "land"), "earth"}
+
+      {:ok, mission} =
+        attrs("999999999.999", steps)
+        |> Missions.change_mission()
+        |> Ecto.Changeset.apply_action(:calculate)
+
+      %{total: total, launch_mass: launch_mass} = Missions.calculate(mission)
+
+      assert length(Integer.digits(total)) > 28
+      assert Decimal.to_string(launch_mass, :normal) == "#{total + 999_999_999}.999"
     end
 
     test "matches the brief for every example mission" do

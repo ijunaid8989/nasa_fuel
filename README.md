@@ -43,7 +43,7 @@ lifts the equipment plus all the fuel burned after it. Working forwards gives
 the wrong totals.
 
 The maths uses exact integers, not floats. A gravity of 9.807 is treated as
-exactly 9807/1000. Fuel grows quickly along a long path, so floats would start
+exactly 9807/1000, and a mass of 28,801.5 kg as exactly 57603/2. Fuel grows quickly along a long path, so floats would start
 dropping whole kilograms after about 40 steps for a heavy ship, and would
 overflow on a very long path.
 
@@ -64,6 +64,7 @@ tests.
 | `NasaFuel.Planet`             | Supported planets and their gravity (Earth 9.807, Moon 1.62, Mars 3.711). |
 | `NasaFuel.Missions`           | Context the web layer calls: builds changesets, runs the calculation, holds the example missions. |
 | `NasaFuel.Missions.Mission`   | Embedded Ecto schema for mass and steps, with all form validation. |
+| `NasaFuel.Missions.Mass`      | Ecto type that reads a typed mass (`28,801.5 kg`) into an exact `Decimal`. |
 | `NasaFuel.Missions.Step`      | Embedded schema for one step: action and planet. |
 | `NasaFuelWeb.MissionLive`     | The page: form, adding and removing steps, examples, and the result. |
 
@@ -72,11 +73,13 @@ Nothing is stored.
 
 ## Validation
 
-* Mass is required, must be a whole number of kilograms, greater than 0, and
-  at most 1,000,000,000 kg. That limit is only a sanity check: it is far
-  above any real spacecraft, so a bigger number is almost certainly a typo.
-  Thousands separators and a trailing `.0` are fine, so `28,801` and
-  `28801.0` both read as 28,801 kg.
+* Mass is required, must be a number greater than 0, at most
+  1,000,000,000 kg, and have at most 3 decimal places (grams). The limit is
+  only a sanity check: it is far above any real spacecraft, so a bigger
+  number is almost certainly a typo. Mass is written the way people write
+  it: `28801`, `28,801`, `28 801`, `28801.5` and `28,801.5 kg` all work.
+  Scientific notation such as `1e5` does not, so a stray letter is never read
+  as a number.
 * The path needs at least one step and at most 100, which is again only a
   sanity check. The count is checked before any step is read, so an
   oversized path costs nothing, and the Add step button stops at 100. Each

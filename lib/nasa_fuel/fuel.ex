@@ -16,6 +16,7 @@ defmodule NasaFuel.Fuel do
   """
 
   @type action :: :launch | :land
+  @type mass :: number() | Decimal.t()
   @type step :: {action(), gravity :: number()}
 
   @doc """
@@ -25,19 +26,20 @@ defmodule NasaFuel.Fuel do
       iex> NasaFuel.Fuel.base_fuel(:land, 28801, 9.807)
       9278
   """
-  @spec base_fuel(action(), number(), number()) :: integer()
-  def base_fuel(:launch, mass, gravity), do: formula(mass, gravity, 42, 33)
-  def base_fuel(:land, mass, gravity), do: formula(mass, gravity, 33, 42)
+  @spec base_fuel(action(), mass(), number()) :: integer()
+  def base_fuel(action, mass, gravity), do: fuel(action, to_fraction(mass), to_fraction(gravity))
 
-  # `mass * gravity * (per_mille / 1000) - offset`, rounded down, in exact
-  # integer maths. Each step carries the fuel for every later step, so the
-  # mass grows fast along a long path: floats start dropping whole kilograms
-  # past 2^53 (about 40 steps for a heavy ship) and overflow past 1.8e308,
-  # while integers just keep growing.
-  defp formula(mass, gravity, per_mille, offset) do
-    {mass_num, mass_den} = to_fraction(mass)
-    {gravity_num, gravity_den} = to_fraction(gravity)
+  # Inside this module masses and gravities are exact `{numerator,
+  # denominator}` fractions. Each step carries the fuel for every later
+  # step, so the mass grows fast along a long path: floats start dropping
+  # whole kilograms past 2^53 (about 40 steps for a heavy ship) and overflow
+  # past 1.8e308, and Decimal rounds to 28 digits, while integers just keep
+  # growing.
+  defp fuel(:launch, mass, gravity), do: formula(mass, gravity, 42, 33)
+  defp fuel(:land, mass, gravity), do: formula(mass, gravity, 33, 42)
 
+  # `mass * gravity * (per_mille / 1000) - offset`, rounded down.
+  defp formula({mass_num, mass_den}, {gravity_num, gravity_den}, per_mille, offset) do
     Integer.floor_div(mass_num * gravity_num * per_mille, mass_den * gravity_den * 1000) -
       offset
   end
@@ -46,9 +48,10 @@ defmodule NasaFuel.Fuel do
   # 9807/1000 rather than the nearest binary fraction.
   defp to_fraction(number) when is_integer(number), do: {number, 1}
 
-  defp to_fraction(number) when is_float(number) do
-    %Decimal{sign: sign, coef: coef, exp: exp} = Decimal.from_float(number)
+  defp to_fraction(number) when is_float(number),
+    do: number |> Decimal.from_float() |> to_fraction()
 
+  defp to_fraction(%Decimal{sign: sign, coef: coef, exp: exp}) when is_integer(coef) do
     if exp >= 0,
       do: {sign * coef * Integer.pow(10, exp), 1},
       else: {sign * coef, Integer.pow(10, -exp)}
@@ -60,21 +63,32 @@ defmodule NasaFuel.Fuel do
       iex> NasaFuel.Fuel.step_fuel(:land, 28801, 9.807)
       13447
 
+  The mass can be a `Decimal`, and is used exactly:
+
+      iex> NasaFuel.Fuel.step_fuel(:land, Decimal.new("28801.5"), 9.807)
+      13448
+
   On a planet with strong enough gravity (above about 23.8 m/s² for a
   launch, or 30.3 m/s² for a landing) the fuel for the fuel can be as big as
   the fuel itself, so the sum never ends. Then this raises `ArgumentError`
   instead of looping. `settles?/2` tells whether a gravity is safe, and
   `NasaFuel.Planet` checks every supported planet with it at compile time.
   """
-  @spec step_fuel(action(), number(), number()) :: non_neg_integer()
-  def step_fuel(action, mass, gravity) do
-    action |> base_fuel(mass, gravity) |> with_fuel_for_fuel(action, gravity)
+  @spec step_fuel(action(), mass(), number()) :: non_neg_integer()
+  def step_fuel(action, mass, gravity), do: step(action, to_fraction(mass), gravity)
+
+  defp step(action, mass, gravity) do
+    exact_gravity = to_fraction(gravity)
+
+    action
+    |> fuel(mass, exact_gravity)
+    |> with_fuel_for_fuel(action, gravity, exact_gravity)
   end
 
-  defp with_fuel_for_fuel(fuel, _action, _gravity) when fuel <= 0, do: 0
+  defp with_fuel_for_fuel(fuel, _action, _gravity, _exact_gravity) when fuel <= 0, do: 0
 
-  defp with_fuel_for_fuel(fuel, action, gravity) do
-    case base_fuel(action, fuel, gravity) do
+  defp with_fuel_for_fuel(fuel, action, gravity, exact_gravity) do
+    case fuel(action, {fuel, 1}, exact_gravity) do
       # The formula only grows with the mass, so once the extra fuel is not
       # smaller than the fuel it carries, every later round is at least as big.
       extra when extra >= fuel ->
@@ -83,7 +97,7 @@ defmodule NasaFuel.Fuel do
                 "so the total never settles"
 
       extra ->
-        fuel + with_fuel_for_fuel(extra, action, gravity)
+        fuel + with_fuel_for_fuel(extra, action, gravity, exact_gravity)
     end
   end
 
@@ -112,13 +126,15 @@ defmodule NasaFuel.Fuel do
       iex> NasaFuel.Fuel.breakdown(28801, [{:launch, 9.807}, {:land, 1.62}, {:launch, 1.62}, {:land, 9.807}])
       [32_988, 2_462, 3_001, 13_447]
   """
-  @spec breakdown(number(), [step()]) :: [non_neg_integer()]
+  @spec breakdown(mass(), [step()]) :: [non_neg_integer()]
   def breakdown(mass, steps) do
+    {mass_num, mass_den} = to_fraction(mass)
+
     {fuels, _carried} =
       steps
       |> Enum.reverse()
       |> Enum.map_reduce(0, fn {action, gravity}, carried ->
-        fuel = step_fuel(action, mass + carried, gravity)
+        fuel = step(action, {mass_num + carried * mass_den, mass_den}, gravity)
         {fuel, carried + fuel}
       end)
 
@@ -131,6 +147,6 @@ defmodule NasaFuel.Fuel do
       iex> NasaFuel.Fuel.total(28801, [{:launch, 9.807}, {:land, 1.62}, {:launch, 1.62}, {:land, 9.807}])
       51898
   """
-  @spec total(number(), [step()]) :: non_neg_integer()
+  @spec total(mass(), [step()]) :: non_neg_integer()
   def total(mass, steps), do: mass |> breakdown(steps) |> Enum.sum()
 end

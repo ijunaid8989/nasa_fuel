@@ -10,6 +10,7 @@ defmodule NasaFuel.Missions.Mission do
 
   import Ecto.Changeset
 
+  alias NasaFuel.Missions.Mass
   alias NasaFuel.Missions.Step
   alias NasaFuel.Planet
 
@@ -17,23 +18,27 @@ defmodule NasaFuel.Missions.Mission do
   # so a bigger number is almost certainly a typo.
   @max_mass 1_000_000_000
 
+  # Grams are as fine as a spacecraft mass needs to be, and the limit keeps
+  # a pasted run of digits from turning into a huge exact fraction.
+  @max_decimal_places 3
+
   # The same kind of sanity limit for the path: a hundred steps is far more
   # than any real mission, and it bounds the work done on each keystroke.
   @max_steps 100
 
-  @type t :: %__MODULE__{mass: pos_integer() | nil, steps: [Step.t()]}
+  @type t :: %__MODULE__{mass: Decimal.t() | nil, steps: [Step.t()]}
 
   @primary_key false
   embedded_schema do
-    field :mass, :integer
+    field :mass, Mass
     embeds_many :steps, Step, on_replace: :delete
   end
 
   @doc false
   def changeset(mission, attrs) do
     mission
-    |> cast(normalise_mass(attrs), [:mass],
-      message: fn :mass, _ -> "must be a whole number of kilograms" end
+    |> cast(attrs, [:mass],
+      message: fn :mass, _ -> "must be a number, like 28,801 or 28801.5" end
     )
     |> validate_required(:mass, message: "enter the spacecraft mass")
     |> validate_number(:mass, greater_than: 0, message: "must be greater than 0")
@@ -41,6 +46,7 @@ defmodule NasaFuel.Missions.Mission do
       less_than_or_equal_to: @max_mass,
       message: "must be at most 1,000,000,000 kg"
     )
+    |> validate_change(:mass, &validate_decimal_places/2)
     |> cast_steps(attrs)
   end
 
@@ -48,19 +54,12 @@ defmodule NasaFuel.Missions.Mission do
   @spec max_steps() :: pos_integer()
   def max_steps, do: @max_steps
 
-  # People write masses like "28,801" or "28801.0". Read those as the whole
-  # number they are, and leave anything else for the integer cast to reject.
-  defp normalise_mass(%{"mass" => mass} = attrs) when is_binary(mass),
-    do: %{attrs | "mass" => whole_number(mass)}
+  # Mass casts trailing zeros away, so the exponent is the real number of
+  # decimal places.
+  defp validate_decimal_places(:mass, %Decimal{exp: exp}) when exp < -@max_decimal_places,
+    do: [mass: "use at most #{@max_decimal_places} decimal places"]
 
-  defp normalise_mass(attrs), do: attrs
-
-  defp whole_number(text) do
-    case Regex.run(~r/^(-?\d+)(?:\.0*)?$/, String.replace(text, [",", "_", " "], "")) do
-      [_, digits] -> digits
-      nil -> text
-    end
-  end
+  defp validate_decimal_places(:mass, _mass), do: []
 
   # The step limit is checked on the raw params, before any step is cast,
   # so an oversized path costs no more than counting it.

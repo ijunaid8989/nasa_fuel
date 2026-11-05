@@ -31,7 +31,7 @@ defmodule NasaFuel.Missions do
   @type report :: %{
           total: non_neg_integer(),
           per_step: [non_neg_integer()],
-          launch_mass: pos_integer()
+          launch_mass: Decimal.t()
         }
 
   @doc """
@@ -52,8 +52,15 @@ defmodule NasaFuel.Missions do
   def calculate(%Mission{mass: mass, steps: steps}) do
     per_step = Fuel.breakdown(mass, Enum.map(steps, &{&1.action, Planet.gravity(&1.planet)}))
     total = Enum.sum(per_step)
-    %{total: total, per_step: per_step, launch_mass: mass + total}
+    %{total: total, per_step: per_step, launch_mass: add_kg(mass, total)}
   end
+
+  # Exact `mass + kg`. Decimal.add/2 would round to 28 digits, and a long
+  # flight path needs more than that.
+  defp add_kg(%Decimal{coef: coef, exp: exp} = mass, kg) when exp < 0,
+    do: %{mass | coef: coef + kg * Integer.pow(10, -exp)}
+
+  defp add_kg(%Decimal{} = mass, kg), do: Decimal.new(Decimal.to_integer(mass) + kg)
 
   @doc """
   The example missions from the brief.

@@ -17,6 +17,21 @@ defmodule NasaFuelWeb.MissionLiveTest do
     refute render(view) =~ "enter the spacecraft mass"
   end
 
+  test "a decimal mass gives an exact total and launch mass", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    change(view, %{mass: "28,801.5", steps: %{"0" => %{action: "land", planet: "earth"}}})
+
+    assert view |> element("#total-fuel") |> render() =~ "13,448 kg"
+    assert view |> element("#fuel-result") |> render() =~ "42,249.5 kg"
+  end
+
+  test "a step shows no fuel figure until there is a result", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    assert view |> element("#step-0-fuel") |> render() =~ ~r{<span[^>]*>\s*</span>}
+  end
+
   test "shows the fuel as soon as the mass is entered", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
 
@@ -205,10 +220,10 @@ defmodule NasaFuelWeb.MissionLiveTest do
     assert render(view) =~ "must be greater than 0"
   end
 
-  test "reads a mass written with commas or a .0", %{conn: conn} do
+  test "reads a mass written with commas, a .0 or kg", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
 
-    for mass <- ["28,801", "28801.0", " 28801 "] do
+    for mass <- ["28,801", "28801.0", " 28801 ", "28,801 kg"] do
       change(view, %{mass: mass, steps: %{"0" => %{action: "land", planet: "earth"}}})
       assert view |> element("#total-fuel") |> render() =~ "13,447 kg", inspect(mass)
     end
@@ -220,7 +235,8 @@ defmodule NasaFuelWeb.MissionLiveTest do
     for {mass, message} <- [
           {"", "enter the spacecraft mass"},
           {"-10", "must be greater than 0"},
-          {"12.5", "must be a whole number of kilograms"}
+          {"12.5.1", "must be a number, like 28,801 or 28801.5"},
+          {"12.3456", "use at most 3 decimal places"}
         ] do
       html = change(view, %{mass: mass, steps: %{"0" => %{action: "land", planet: "earth"}}})
 
@@ -252,7 +268,9 @@ defmodule NasaFuelWeb.MissionLiveTest do
     assert NasaFuelWeb.MissionLive.format_kg(999) == "999 kg"
     assert NasaFuelWeb.MissionLive.format_kg(212_161) == "212,161 kg"
     assert NasaFuelWeb.MissionLive.format_kg(1_234_567) == "1,234,567 kg"
-    assert NasaFuelWeb.MissionLive.format_kg(nil) == "—"
+    assert NasaFuelWeb.MissionLive.format_kg(Decimal.new("1234567.5")) == "1,234,567.5 kg"
+    assert NasaFuelWeb.MissionLive.format_kg(Decimal.new("28801.50")) == "28,801.5 kg"
+    assert NasaFuelWeb.MissionLive.format_kg(Decimal.new("28801.000")) == "28,801 kg"
     assert NasaFuelWeb.MissionLive.format_kg(-123) == "-123 kg"
     assert NasaFuelWeb.MissionLive.format_kg(-1_234) == "-1,234 kg"
   end
